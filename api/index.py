@@ -1,6 +1,8 @@
-from fastapi import FastAPI, Query
-import requests
+import httpx
 import json
+import urllib.parse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import StreamingResponse
 
 app = FastAPI()
 
@@ -9,12 +11,31 @@ COOKIE = "BRANDS_DEFAULT_LANDING_VERSION=4; BRANDS_SMALL_BRANDS_LANDING_VERSION=
 
 @app.get("/")
 async def home():
-    return {"message": "YouTube Downloader API is Running", "endpoint": "/download?url=YOUR_URL"}
+    return {"message": "YouTube Proxy Downloader is Running", "usage": "/download?url=YOUTUBE_URL"}
 
+# --- Proxy System ---
+@app.get("/proxy")
+async def proxy_engine(url: str):
+    """এটি সোর্স থেকে ডেটা নিয়ে ইউজারের কাছে ট্রান্সফার করবে"""
+    async def stream_generator():
+        async with httpx.AsyncClient() as client:
+            # সোর্স ফাইলটি স্ট্রিম মোডে ওপেন করা
+            async with client.stream("GET", url, timeout=None, follow_redirects=True) as response:
+                async for chunk in response.aiter_bytes(chunk_size=1024 * 1024): # ১ মেগাবাইট করে চাঙ্ক করবে
+                    yield chunk
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment; filename=download.mp4"}
+    )
+
+# --- Main API ---
 @app.get("/download")
-async def get_video_links(url: str = Query(..., description="YouTube Video URL")):
+async def get_video_links(request: Request, url: str = Query(..., description="YouTube Video URL")):
     target_api = "https://thesocialcat.com/api/youtube-download"
-    
+    base_url = str(request.base_url).rstrip("/") # আপনার সার্ভারের বর্তমান URL (local বা domain)
+
     headers = {
         'User-Agent': "Mozilla/5.0 (Linux; Android 13; M2103K19I) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.34 Mobile Safari/537.36",
         'Content-Type': "application/json",
@@ -23,48 +44,40 @@ async def get_video_links(url: str = Query(..., description="YouTube Video URL")
         'Cookie': COOKIE
     }
 
-    # কোয়ালিটির তালিকা (1080p থেকে শুরু করে audio/mp3 পর্যন্ত)
     qualities = ["1080p", "720p", "480p", "360p", "240p", "144p", "audio"]
     all_links = []
     video_info = {}
 
-    for q in qualities:
-        payload = {"url": url, "format": q}
-        
-        try:
-            # সার্ভারে রিকোয়েস্ট পাঠানো
-            response = requests.post(target_api, data=json.dumps(payload), headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                media_url = data.get('mediaUrl')
+    async with httpx.AsyncClient() as client:
+        for q in qualities:
+            payload = {"url": url, "format": q}
+            try:
+                response = await client.post(target_api, json=payload, headers=headers, timeout=10)
                 
-                if not video_info:
-                    video_info = {
-                        "title": data.get('caption'),
-                        "thumbnail": data.get('thumbnail'),
-                        "author": data.get('username')
-                    }
-                
-                if media_url:
-                    # অডিও হলে আমরা কনভার্টার সার্ভিসের মাধ্যমে MP3 করার ব্যবস্থা করছি
-                    if q == "audio":
-                        # এখানে আমরা শুধু লেবেল পরিবর্তন করছি এবং নিশ্চিত করছি এটি অডিও হিসেবে গণ্য হয়
+                if response.status_code == 200:
+                    data = response.json()
+                    media_url = data.get('mediaUrl')
+                    
+                    if not video_info:
+                        video_info = {
+                            "title": data.get('caption'),
+                            "thumbnail": data.get('thumbnail'),
+                            "author": data.get('username')
+                        }
+                    
+                    if media_url:
+                        # এখানে মেইন লিঙ্কের বদলে আমাদের /proxy এন্ডপয়েন্ট ব্যবহার করছি
+                        encoded_target = urllib.parse.quote(media_url)
+                        my_proxy_link = f"{base_url}/proxy?url={encoded_target}"
+
                         all_links.append({
-                            "quality": "MP3 Audio (High Quality)",
-                            "download_url": media_url,
-                            "type": "audio",
-                            "ext": "mp3"
+                            "quality": q if q != "audio" else "MP3 Audio",
+                            "download_url": my_proxy_link,
+                            "type": "video" if q != "audio" else "audio",
+                            "ext": "mp4" if q != "audio" else "mp3"
                         })
-                    else:
-                        all_links.append({
-                            "quality": q,
-                            "download_url": media_url,
-                            "type": "video",
-                            "ext": "mp4"
-                        })
-        except Exception as e:
-            continue
+            except Exception:
+                continue
 
     return {
         "success": True,
