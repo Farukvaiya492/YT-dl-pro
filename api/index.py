@@ -1,5 +1,6 @@
 import httpx
 import urllib.parse
+import re
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import StreamingResponse
 
@@ -9,24 +10,28 @@ COOKIE = "BRANDS_DEFAULT_LANDING_VERSION=4; BRANDS_SMALL_BRANDS_LANDING_VERSION=
 
 @app.get("/")
 async def home():
-    return {"message": "YouTube Downloader API is Running", "endpoint": "/download?url=YOUR_URL"}
+    return {"message": "YouTube Downloader API with Custom Filename", "endpoint": "/download?url=YOUR_URL"}
 
-# অডিও ফাইলকে MP3 হিসেবে ফোর্স ডাউনলোড করানোর প্রক্সি
-@app.get("/proxy-audio")
-async def proxy_audio(url: str):
+# প্রক্সি ইঞ্জিন: এটি ফাইল স্ট্রিমিং এবং কাস্টম নাম সেট করার কাজ করে
+@app.get("/proxy")
+async def proxy_download(url: str, filename: str):
     async def stream_generator():
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("GET", url, follow_redirects=True) as response:
-                async for chunk in response.aiter_bytes(chunk_size=1024 * 64):
+                async for chunk in response.aiter_bytes(chunk_size=1024 * 128):
                     yield chunk
+
+    # অডিও বা ভিডিওর জন্য মিডিয়া টাইপ নির্ধারণ
+    media_type = "audio/mpeg" if filename.endswith(".mp3") else "video/mp4"
+
     return StreamingResponse(
         stream_generator(),
-        media_type="audio/mpeg",
-        headers={"Content-Disposition": "attachment; filename=audio.mp3"}
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
     )
 
 @app.get("/download")
-async def get_video_links(request: Request, url: str = Query(..., description="YouTube Video URL")):
+async def get_video_links(request: Request, url: str = Query(...)):
     target_api = "https://thesocialcat.com/api/youtube-download"
     base_url = str(request.base_url).rstrip("/")
     
@@ -53,29 +58,31 @@ async def get_video_links(request: Request, url: str = Query(..., description="Y
                     
                     if not video_info:
                         video_info = {
-                            "title": data.get('caption'),
+                            "title": data.get('caption', 'video'),
                             "thumbnail": data.get('thumbnail'),
                             "author": data.get('username')
                         }
-                    
+
                     if media_url:
-                        if q == "audio":
-                            # শুধু অডিওর জন্য প্রক্সি লিঙ্ক ব্যবহার হবে যাতে .mp3 হিসেবে ডাউনলোড হয়
-                            final_url = f"{base_url}/proxy-audio?url={urllib.parse.quote(media_url)}"
-                            all_links.append({
-                                "quality": "MP3 Audio (High Quality)",
-                                "download_url": final_url,
-                                "type": "audio",
-                                "ext": "mp3"
-                            })
-                        else:
-                            # ভিডিওর জন্য আগের মতোই সরাসরি লিঙ্ক থাকবে
-                            all_links.append({
-                                "quality": q,
-                                "download_url": media_url,
-                                "type": "video",
-                                "ext": "mp4"
-                            })
+                        # ফাইলের নাম থেকে অদরকারি ক্যারেক্টার মুছে ফেলা (Safe Filename)
+                        raw_title = video_info['title']
+                        clean_title = re.sub(r'[^\w\s-]', '', raw_title).strip().replace(' ', '_')
+                        
+                        file_ext = "mp3" if q == "audio" else "mp4"
+                        final_filename = f"{clean_title}_{q}.{file_ext}"
+                        
+                        # ভিডিও এবং অডিও—উভয়কেই প্রক্সির মাধ্যমে পাঠানো হচ্ছে নাম ঠিক রাখার জন্য
+                        encoded_url = urllib.parse.quote(media_url)
+                        encoded_filename = urllib.parse.quote(final_filename)
+                        
+                        proxy_link = f"{base_url}/proxy?url={encoded_url}&filename={encoded_filename}"
+
+                        all_links.append({
+                            "quality": q if q != "audio" else "MP3 High Quality",
+                            "download_url": proxy_link,
+                            "type": "audio" if q == "audio" else "video",
+                            "ext": file_ext
+                        })
             except:
                 continue
 
