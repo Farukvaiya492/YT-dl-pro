@@ -5,7 +5,7 @@ import re
 app = FastAPI()
 
 def clean_filename(title):
-    # ফাইলের নাম থেকে নিষিদ্ধ চিহ্ন বাদ দেওয়া
+    # ফাইলের নাম থেকে নিষিদ্ধ চিহ্ন বাদ দিয়ে ক্লিন করা
     return re.sub(r'[\\/*?:"<>|]', "", title)
 
 @app.get("/")
@@ -14,51 +14,71 @@ async def home():
 
 @app.get("/download")
 async def get_video_links(url: str = Query(..., description="YouTube Video URL")):
-    # আমরা একটি স্টেবল এবং ফ্রি API ব্যবহার করছি যাতে কুকি লাগে না
-    vkr_api = f"https://api.vkrdown.com/api/get?url={url}"
+    # আমরা একটি শক্তিশালী এবং বিকল্প API ব্যবহার করছি
+    # এটি 'vkrdown' এর চেয়ে বেশি স্টেবল
+    target_api = f"https://api.cobalt.tools/api/json"
     
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    # কোবাল্ট এপিআই এর জন্য পেলোড
+    payload = {
+        "url": url,
+        "vQuality": "1080", # সর্বোচ্চ কোয়ালিটি চেষ্টা করবে
+        "aFormat": "mp3",   # অডিওর জন্য mp3
+        "isAudioOnly": False
+    }
+
+    results = []
+
     try:
-        response = requests.get(vkr_api, timeout=15)
-        if response.status_code != 200:
-            return {"success": False, "message": "External Server Error"}
-            
+        # ভিডিওর জন্য রিকোয়েস্ট
+        response = requests.post(target_api, json=payload, headers=headers, timeout=15)
         data = response.json()
-        title = data.get("title", "video")
-        safe_title = clean_filename(title)
-        medias = data.get("medias", [])
-        
-        all_results = []
-        
-        for item in medias:
-            quality = item.get("quality")
-            download_url = item.get("url")
-            extension = item.get("extension")
-            
-            # অডিও বা MP3 আলাদা করা
-            if "audio" in quality.lower() or extension == "mp3":
-                filename = f"{safe_title} (Audio).mp3"
-                all_results.append({
-                    "quality": "MP3 Audio",
-                    "download_url": download_url,
-                    "filename": filename,
-                    "type": "audio"
-                })
+
+        if data.get("status") == "stream" or data.get("status") == "picker":
+            # যদি Picker (অনেকগুলো কোয়ালিটি) আসে
+            if data.get("status") == "picker":
+                for item in data.get("picker", []):
+                    q = item.get("type", "video")
+                    link = item.get("url")
+                    filename = f"Video_{q}.mp4"
+                    results.append({
+                        "quality": q,
+                        "download_url": link,
+                        "filename": filename,
+                        "type": "video"
+                    })
             else:
-                # ভিডিওর সব কোয়ালিটি (1080p, 720p, etc.)
-                filename = f"{safe_title} ({quality}).mp4"
-                all_results.append({
-                    "quality": quality,
-                    "download_url": download_url,
-                    "filename": filename,
+                # সিঙ্গেল স্ট্রিম আসলে
+                results.append({
+                    "quality": "Best Quality",
+                    "download_url": data.get("url"),
+                    "filename": "video.mp4",
                     "type": "video"
                 })
 
-        return {
-            "success": True,
-            "title": title,
-            "thumbnail": data.get("thumbnail"),
-            "results": all_results
-        }
+            # অডিওর জন্য আলাদা একটি রিকোয়েস্ট (MP3 নিশ্চিত করতে)
+            payload["isAudioOnly"] = True
+            audio_response = requests.post(target_api, json=payload, headers=headers, timeout=15)
+            audio_data = audio_response.json()
+            
+            if audio_data.get("url"):
+                results.append({
+                    "quality": "MP3 Audio",
+                    "download_url": audio_data.get("url"),
+                    "filename": "audio.mp3",
+                    "type": "audio"
+                })
+
+            return {
+                "success": True,
+                "results": results
+            }
+        else:
+            return {"success": False, "message": "Could not fetch media", "details": data}
 
     except Exception as e:
         return {"success": False, "error": str(e)}
