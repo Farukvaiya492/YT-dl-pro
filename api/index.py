@@ -13,8 +13,12 @@ from fastapi.templating import Jinja2Templates
 
 app = FastAPI()
 
-# Templates ফোল্ডার কনফিগারেশন
-templates = Jinja2Templates(directory="templates")
+# প্যাথ ফিক্সিং: প্রোজেক্টের রুট থেকে templates ফোল্ডার খুঁজে বের করা
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(current_dir)
+templates_path = os.path.join(root_dir, "templates")
+
+templates = Jinja2Templates(directory=templates_path)
 
 def generate_random_id(length=20):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
@@ -29,7 +33,7 @@ def clean_filename(title: str):
 
 @app.get("/")
 def read_root(request: Request):
-    """Template থেকে ওয়েবসাইট লোড করবে"""
+    """এটি এখন নির্ভুলভাবে templates/index.html লোড করবে"""
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/api")
@@ -91,4 +95,3 @@ def file_stream(data: str = Query(...), name: str = Query("video"), ext: str = Q
         }
         return StreamingResponse(req.iter_content(chunk_size=1024*512), headers=headers)
     except: raise HTTPException(status_code=500, detail="Error")
-
