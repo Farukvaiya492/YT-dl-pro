@@ -36,73 +36,72 @@ def download_youtube(request: Request, url: str = Query(...)):
     target_api = "https://thesocialcat.com/api/youtube-download"
     base_url = str(request.base_url).rstrip("/")
     
-    # র‍্যান্ডম কুকি ও সেশন জেনারেশন
-    timestamp = int(time.time() * 1000)
-    ga_id = f"GA1.1.{random.randint(1000000000, 9999999999)}.{int(time.time())}"
-    session_id = f"{timestamp}${generate_random_id(5)}$g0$t{timestamp}"
-    
-    headers = {
-        'User-Agent': "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36",
-        'Content-Type': "application/json",
-        'origin': "https://thesocialcat.com",
-        'referer': "https://thesocialcat.com/tools/youtube-video-downloader",
-        'Cookie': f"_ga={ga_id}; _ga_ZECYDJ3Y4Y=GS2.1.s{session_id}; dmcfkjn3cdc={generate_random_id(26).lower()}; theme=dark"
-    }
-
-    # আমরা একসাথে ৭২০পি এবং অডিও চেক করব
-    formats = ["720p", "audio"]
+    # কোয়ালিটি লিস্ট
+    qualities = ["1080p", "720p", "480p", "360p", "240p", "144p", "audio"]
     all_results = []
     video_info = {}
 
-    for fmt in formats:
+    for q in qualities:
+        # প্রতিবার রিকোয়েস্টে নতুন র্যান্ডম কুকি
+        timestamp = int(time.time() * 1000)
+        ga_id = f"GA1.1.{random.randint(1000000000, 9999999999)}.{int(time.time())}"
+        session_id = f"{timestamp}${generate_random_id(5)}$g0$t{timestamp}"
+        
+        headers = {
+            'User-Agent': "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+            'Content-Type': "application/json",
+            'origin': "https://thesocialcat.com",
+            'referer': "https://thesocialcat.com/tools/youtube-video-downloader",
+            'Cookie': f"_ga={ga_id}; _ga_ZECYDJ3Y4Y=GS2.1.s{session_id}; dmcfkjn3cdc={generate_random_id(26).lower()}"
+        }
+
         try:
-            payload = {"url": url, "format": fmt}
-            response = requests.post(target_api, data=json.dumps(payload), headers=headers, timeout=15)
+            payload = {"url": url, "format": q}
+            response = requests.post(target_api, data=json.dumps(payload), headers=headers, timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
                 media_url = data.get("mediaUrl")
                 
-                if not video_info:
-                    raw_dur = data.get("videoMeta", {}).get("duration", 0)
-                    video_info = {
-                        "title": data.get("caption", "YouTube Video"),
-                        "duration": format_duration(raw_dur),
-                        "thumbnail": data.get("thumbnail"),
-                        "dev": "API Dev @Offline_669"
-                    }
-                
                 if media_url:
+                    if not video_info:
+                        raw_dur = data.get("videoMeta", {}).get("duration", 0)
+                        video_info = {
+                            "title": data.get("caption", "YouTube Video"),
+                            "duration": format_duration(raw_dur),
+                            "thumbnail": data.get("thumbnail"),
+                            "author": data.get("username"),
+                            "dev": "API Dev @Offline_669"
+                        }
+                    
                     clean_name = clean_filename(video_info["title"])
                     encoded_url = base64.b64encode(media_url.encode()).decode()
-                    ext = "mp3" if fmt == "audio" else "mp4"
+                    ext = "mp3" if q == "audio" else "mp4"
                     
                     # প্রক্সি লিঙ্ক জেনারেশন
                     proxy_link = f"{base_url}/file-stream?data={encoded_url}&name={urllib.parse.quote(clean_name)}&ext={ext}"
                     
                     all_results.append({
-                        "quality": "MP3 Audio" if fmt == "audio" else fmt,
+                        "quality": "MP3 Audio" if q == "audio" else q,
                         "download_url": proxy_link,
-                        "type": fmt
+                        "type": "audio" if q == "audio" else "video"
                     })
         except:
             continue
 
     if not all_results:
-        return {"ok": False, "message": "No download links found."}
+        return {"ok": False, "message": "No links found"}
 
     return {
         "ok": True,
         "video_info": video_info,
-        "mediaUrl": all_results[0]["download_url"],
-        "mediaUrls": all_results
+        "results": all_results
     }
 
 @app.get("/file-stream")
 def file_stream(data: str = Query(...), name: str = Query("video"), ext: str = Query("mp4")):
     try:
         real_url = base64.b64decode(data).decode()
-        # 
         req = requests.get(real_url, stream=True, timeout=120)
         
         headers = {
