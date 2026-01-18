@@ -6,10 +6,9 @@ from fastapi.responses import StreamingResponse
 
 app = FastAPI()
 
-# একাধিক কুকি লিস্ট (এখানে আরও কুকি যোগ করতে পারবেন)
+# কুকি লিস্ট
 COOKIES_LIST = [
     "BRANDS_DEFAULT_LANDING_VERSION=4; BRANDS_SMALL_BRANDS_LANDING_VERSION=2; BRANDS_UGC_LANDING_VERSION=2; mp_16cbc705ab859c1f4e2db274a18b0696_mixpanel=%7B%22distinct_id%22%3A%20%22%24device%3A19ba8c08ea510a7-015d6e8aa6b7a3-4f6f762b-4eb16-19ba8c08ea510a8%22%2C%22%24device_id%22%3A%20%2219ba8c08ea510a7-015d6e8aa6b7a3-4f6f762b-4eb16-19ba8c08ea510a8%22%2C%22%24initial_referrer%22%3A%20%22%24direct%22%2C%22%24initial_referring_domain%22%3A%20%22%24direct%22%2C%22__mps%22%3A%20%7B%7D%2C%22__mpso%22%3A%20%7B%22%24initial_referrer%22%3A%20%22%24direct%22%2C%22%24initial_referring_domain%22%3A%20%22%24direct%22%7D%2C%22__mpus%22%3A%20%7B%7D%2C%22__mpa%22%3A%20%7B%7D%2C%22__mpu%22%3A%20%7B%7D%2C%22__mpr%22%3A%20%5B%5D%2C%22__mpap%22%3A%20%5B%5D%2C%22source%22%3A%20%22unknown%22%7D; AMP_MKTG_8cc66ffd0f=JTdCJTdE; _fbp=fb.1.1768062752582.257824970208281922; _tt_enable_cookie=1; _ttp=01KEMC163EX38R4MP15Q3AE1EF_.tt.1; AMP_8cc66ffd0f=JTdCJTIyZGV2aWNlSWQlMjIlM0ElMjJhNzM1YzY5My00ZTQ0LTRhZjUtYmUwNy01MDBjNmQ4ODEyZjglMjIlMkMlMjJzZXNzaW9uSWQlMjIlM0ExNzY4MDYyNzUxNTA5JTJDJTIyb3B0T3V0JTIyJTNBZmFsc2UlMkMlMjJsYXN0RXZlbnRUaW1lJTIyJTNBMTc2ODA2Mjc2NDk0OCUyQyUyMmxhc3RFdmVudElkJTIyJTNBNiUyQyUyMnBhZ2VDb3VudGVyJTIyJTNBMSU3RA==; ttcsid_CFC1MRRC77U0H42CQU6G=1768062752928::C0116f2Z-5GiLkiEtXUp.1.1768062775044.0; ttcsid=1768062752932::9GQeg_bHdRwJqFbAMoJu.1.1768062775045.0",
-    # আপনি চাইলে এখানে কমা দিয়ে আরও কুকি স্ট্রিং বসাতে পারেন
 ]
 
 @app.get("/")
@@ -20,26 +19,30 @@ async def home():
         "endpoint": "/download?url=YOUR_URL"
     }
 
-# অডিও ফাইলকে MP3 হিসেবে ফোর্স ডাউনলোড করানোর প্রক্সি
-@app.get("/proxy-audio")
-async def proxy_audio(url: str):
+# ভিডিও ও অডিও প্রক্সি করার এন্ডপয়েন্ট (যাতে আপনার সার্ভারের নাম দেখায়)
+@app.get("/stream")
+async def stream_media(url: str, type: str = "video"):
     async def stream_generator():
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("GET", url, follow_redirects=True) as response:
-                async for chunk in response.aiter_bytes(chunk_size=1024 * 64):
+                async for chunk in response.aiter_bytes(chunk_size=1024 * 128):
                     yield chunk
+
+    filename = "video.mp4" if type == "video" else "audio.mp3"
+    media_type = "video/mp4" if type == "video" else "audio/mpeg"
+    
     return StreamingResponse(
         stream_generator(),
-        media_type="audio/mpeg",
-        headers={"Content-Disposition": "attachment; filename=audio.mp3"}
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
 @app.get("/download")
 async def get_video_links(request: Request, url: str = Query(..., description="YouTube Video URL")):
     target_api = "https://thesocialcat.com/api/youtube-download"
+    # আপনার হোস্টিং সার্ভারের ডোমেইন অটোমেটিক নিয়ে নেবে
     base_url = str(request.base_url).rstrip("/")
     
-    # র্যান্ডম কুকি সিলেক্ট করা হচ্ছে
     selected_cookie = random.choice(COOKIES_LIST)
 
     headers = {
@@ -58,7 +61,7 @@ async def get_video_links(request: Request, url: str = Query(..., description="Y
         for q in qualities:
             payload = {"url": url, "format": q}
             try:
-                response = await client.post(target_api, json=payload, headers=headers, timeout=10)
+                response = await client.post(target_api, json=payload, headers=headers, timeout=15)
                 if response.status_code == 200:
                     data = response.json()
                     media_url = data.get('mediaUrl')
@@ -71,18 +74,22 @@ async def get_video_links(request: Request, url: str = Query(..., description="Y
                         }
 
                     if media_url:
+                        # এখন সব ডাউনলোড লিংক আপনার সার্ভার হয়ে যাবে (যেমন: your-server.com/stream?url=...)
+                        encoded_media_url = urllib.parse.quote(media_url)
+                        
                         if q == "audio":
-                            final_url = f"{base_url}/proxy-audio?url={urllib.parse.quote(media_url)}"
+                            final_proxy_url = f"{base_url}/stream?type=audio&url={encoded_media_url}"
                             all_links.append({
                                 "quality": "MP3 Audio (High Quality)",
-                                "download_url": final_url,
+                                "download_url": final_proxy_url,
                                 "type": "audio",
                                 "ext": "mp3"
                             })
                         else:
+                            final_proxy_url = f"{base_url}/stream?type=video&url={encoded_media_url}"
                             all_links.append({
                                 "quality": q,
-                                "download_url": media_url,
+                                "download_url": final_proxy_url,
                                 "type": "video",
                                 "ext": "mp4"
                             })
