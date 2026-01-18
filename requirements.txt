@@ -1,4 +1,5 @@
 fastapi
-uvicorn
-httpx
 requests
+uvicorn
+jinja2
+aiofiles
